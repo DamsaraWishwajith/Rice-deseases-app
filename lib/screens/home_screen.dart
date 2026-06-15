@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../main.dart';
 import 'alerts_screen.dart';
+import 'alert_detail_screen.dart';
 import 'farmers_screen.dart';
 import 'more_screen.dart';
 import 'scan_screen.dart';
@@ -15,29 +19,7 @@ import '../models/disease_rec.dart';
 import '../services/disease_service.dart';
 import '../models/disease_report.dart';
 
-final List<Alert> initialAlerts = [
-  Alert(
-      id: 1,
-      farmer: "Kamal Perera",
-      disease: "Blast",
-      severity: "High",
-      time: "2h ago",
-      read: false),
-  Alert(
-      id: 2,
-      farmer: "Nimal Silva",
-      disease: "Sheath Blight",
-      severity: "Medium",
-      time: "1d ago",
-      read: false),
-  Alert(
-      id: 3,
-      farmer: "Sunil Fernando",
-      disease: "Brown Spot",
-      severity: "Low",
-      time: "3d ago",
-      read: true),
-];
+
 
 class HomeScreen extends StatefulWidget {
   final Supervisor supervisor;
@@ -56,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String _farmersError = '';
   int _scanCount = 0;
   bool _isLoadingReports = true;
+  List<Alert> _alerts = [];
+  bool _isLoadingAlerts = true;
 
   @override
   void initState() {
@@ -63,8 +47,51 @@ class _HomeScreenState extends State<HomeScreen> {
     _pageController = PageController(initialPage: _selectedIndex);
     _fetchFarmers();
     _fetchReportsCount();
+    _fetchAlerts();
     // Pre-initialize AI model for faster first scan
     DiseaseService().initModel();
+    _setupFirebaseMessaging();
+  }
+
+  Future<void> _setupFirebaseMessaging() async {
+    try {
+      final messaging = FirebaseMessaging.instance;
+      
+      if (widget.supervisor.district.isNotEmpty) {
+        final topic = 'district_${widget.supervisor.district.replaceAll(' ', '_')}';
+        await messaging.subscribeToTopic(topic);
+        print('FCM: Subscribed to district topic: $topic');
+      }
+
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        if (message.notification != null) {
+          final notification = message.notification!;
+          
+          // Trigger a native system notification banner at the top of the screen
+          flutterLocalNotificationsPlugin.show(
+            notification.hashCode,
+            notification.title,
+            notification.body,
+            NotificationDetails(
+              android: AndroidNotificationDetails(
+                channel.id,
+                channel.name,
+                channelDescription: channel.description,
+                icon: '@mipmap/ic_launcher',
+                importance: Importance.max,
+                priority: Priority.high,
+              ),
+            ),
+          );
+
+          // Refresh the alerts and counts dynamically
+          _fetchAlerts();
+          _fetchReportsCount();
+        }
+      });
+    } catch (e) {
+      print('FCM setup error: $e');
+    }
   }
 
   Future<void> _fetchFarmers() async {
@@ -150,6 +177,51 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _fetchAlerts() async {
+    if (!mounted) return;
+    setState(() => _isLoadingAlerts = true);
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://192.168.8.184:8000/api/get-district-alerts'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'supervisor_id': widget.supervisor.id,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> result = jsonDecode(response.body);
+        if (result['success'] == true) {
+          final List<dynamic> alertData = result['data'];
+          if (!mounted) return;
+          setState(() {
+            _alerts = alertData.map((json) => Alert(
+              id: json['id'],
+              farmer: json['farmer'],
+              disease: json['disease'],
+              severity: json['severity'],
+              time: json['time'],
+              read: json['read'] ?? false,
+              image: json['image'],
+              note: json['note'],
+              solutions: json['solutions'],
+              district: json['district'],
+            )).toList();
+            _isLoadingAlerts = false;
+          });
+        }
+      } else {
+        if (!mounted) return;
+        setState(() => _isLoadingAlerts = false);
+      }
+    } catch (e) {
+      debugPrint('HomeScreen alerts fetch error: $e');
+      if (!mounted) return;
+      setState(() => _isLoadingAlerts = false);
+    }
+  }
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -158,7 +230,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final unreadCount = initialAlerts.where((a) => !a.read).length;
+    final unreadCount = _alerts.where((a) => !a.read).length;
     final name = widget.supervisor.username
         .replaceAll('_', ' ')
         .split(' ')
@@ -319,12 +391,19 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildStatCard(
                   '👤',
                   _isLoadingFarmers ? '...' : _farmers.length.toString(),
-                  'Farmers'),
+                  'Farmers',
+                  onTap: () => _pageController.jumpToPage(1)),
               const SizedBox(width: 12),
               _buildStatCard('🔬',
-                  _isLoadingReports ? '...' : _scanCount.toString(), 'Scans'),
+                  _isLoadingReports ? '...' : _scanCount.toString(), 'Scans',
+                  onTap: () => _pageController.jumpToPage(2)),
               const SizedBox(width: 12),
-              _buildStatCard('⚠️', '3', 'Alerts', color: AppColors.accent),
+              _buildStatCard(
+                  '⚠️',
+                  _isLoadingAlerts ? '...' : _alerts.length.toString(),
+                  'Alerts',
+                  color: AppColors.accent,
+                  onTap: () => _pageController.jumpToPage(3)),
             ],
           ),
         ],
@@ -333,37 +412,41 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildStatCard(String icon, String value, String label,
-      {Color? color}) {
+      {Color? color, VoidCallback? onTap}) {
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-        ),
-        child: Column(
-          children: [
-            Text(icon, style: TextStyle(fontSize: 22, color: color)),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+          ),
+          child: Column(
+            children: [
+              Text(icon, style: TextStyle(fontSize: 22, color: color)),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.6),
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -460,7 +543,27 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        ...initialAlerts.take(2).map((alert) => _buildAlertCard(alert)),
+        if (_isLoadingAlerts)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(20.0),
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.forest),
+              ),
+            ),
+          )
+        else if (_alerts.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(
+              child: Text(
+                'No alerts in your district yet.',
+                style: TextStyle(color: AppColors.sub, fontSize: 14),
+              ),
+            ),
+          )
+        else
+          ..._alerts.take(2).map((alert) => _buildAlertCard(alert)),
       ],
     );
   }
@@ -474,6 +577,20 @@ class _HomeScreenState extends State<HomeScreen> {
             : AppColors.greenL;
 
     return CardWidget(
+      onTap: () {
+        setState(() {
+          final idx = _alerts.indexWhere((a) => a.id == alert.id);
+          if (idx != -1) {
+            _alerts[idx] = alert.copyWith(read: true);
+          }
+        });
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AlertDetailScreen(alert: alert.copyWith(read: true)),
+          ),
+        );
+      },
       padding: const EdgeInsets.all(16),
       child: Row(
         children: [
@@ -507,7 +624,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          TagWidget(text: alert.severity, color: severityColor),
         ],
       ),
     );

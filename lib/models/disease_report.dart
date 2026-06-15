@@ -7,9 +7,6 @@ class DiseaseReport {
   final String? customerNote;
   final String recommendSolutions;
   final String createdAt;
-  final double? temp;
-  final double? hum;
-  final int? soil;
 
   DiseaseReport({
     required this.reportId,
@@ -20,9 +17,6 @@ class DiseaseReport {
     this.customerNote,
     required this.recommendSolutions,
     required this.createdAt,
-    this.temp,
-    this.hum,
-    this.soil,
   });
 
   factory DiseaseReport.fromJson(Map<String, dynamic> json) {
@@ -35,9 +29,6 @@ class DiseaseReport {
       customerNote: json['customer_note'],
       recommendSolutions: json['recommend_solutions'] ?? 'No solutions available',
       createdAt: json['created_at'] ?? '',
-      temp: json['temp'] != null ? (json['temp'] as num).toDouble() : null,
-      hum: json['hum'] != null ? (json['hum'] as num).toDouble() : null,
-      soil: json['soil'] != null ? (json['soil'] as num).toInt() : null,
     );
   }
 }

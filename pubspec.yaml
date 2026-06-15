@@ -20,13 +20,33 @@ dependencies:
   printing: ^5.14.3
   path_provider: ^2.1.5
   flutter_blue_plus: ^1.35.3
+  firebase_core: ^3.0.0
+  firebase_messaging: ^15.0.0
+  flutter_local_notifications: ^17.0.0
+  google_fonts: ^6.2.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.0
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/rice.jpeg"
+  remove_alpha_ios: true
+
+flutter_native_splash:
+  color: "#F9F7F3"
+  image: assets/rice.jpeg
+  android_12:
+    color: "#F9F7F3"
+    image: assets/rice.jpeg
 
 flutter:
   uses-material-design: true
   assets:
     - assets/models/
+    - assets/rice.jpeg

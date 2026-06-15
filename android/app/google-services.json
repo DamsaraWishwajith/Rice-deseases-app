@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "562938796972",
+    "project_id": "rice-deseases",
+    "storage_bucket": "rice-deseases.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:562938796972:android:3d4bd7a895c82613763809",
+        "android_client_info": {
+          "package_name": "com.project.rice_deseases"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAEKYZH0UYJ_Y2L-IERrfvaWCf1SKc-m6w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

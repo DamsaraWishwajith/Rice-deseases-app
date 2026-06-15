@@ -12,7 +12,7 @@ import '../models/farmer.dart';
 import '../models/supervisor.dart';
 import '../models/disease_rec.dart';
 import '../services/disease_service.dart';
-import '../services/ble_service.dart';
+import 'chat_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final List<Farmer> farmers;
@@ -44,23 +44,10 @@ class _ScanScreenState extends State<ScanScreen> {
   double _spread1 = 58;
   double _spread2 = 34;
 
-  // ── BLE / ESP32 ──────────────────────────────────────────────────────────────
-  final _bleService = BleService();
-  BleStatus _bleStatus = BleStatus.idle;
-  Esp32SensorData? _sensorData;
-  StreamSubscription? _bleDataSub;
-  StreamSubscription? _bleStatusSub;
-
   @override
   void initState() {
     super.initState();
     _loadModel();
-    _bleStatusSub = _bleService.statusStream.listen((s) {
-      if (mounted) setState(() => _bleStatus = s);
-    });
-    _bleDataSub = _bleService.dataStream.listen((d) {
-      if (mounted) setState(() => _sensorData = d);
-    });
   }
 
   @override
@@ -82,9 +69,6 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   void dispose() {
     _farmerSearchController.dispose();
-    _bleDataSub?.cancel();
-    _bleStatusSub?.cancel();
-    _bleService.dispose();
     super.dispose();
   }
 
@@ -134,10 +118,11 @@ class _ScanScreenState extends State<ScanScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            TopBar(
-              title: 'Scan Leaf',
-              onBack: _handleBack,
-            ),
+            AppBar(
+  automaticallyImplyLeading: false,
+  centerTitle: true,
+  title: const Text('Scan Leaf',style: TextStyle(fontWeight: FontWeight.bold),),
+),
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(18, 18, 18, 100),
@@ -628,9 +613,6 @@ class _ScanScreenState extends State<ScanScreen> {
       diseaseName: _disease!,
       imageFile: _imageFile!,
       note: _notes,
-      temp: _sensorData?.temp,
-      hum: _sensorData?.hum,
-      soil: _sensorData?.soil,
     );
 
     if (mounted) {
@@ -1045,12 +1027,19 @@ class _ScanScreenState extends State<ScanScreen> {
                         onPressed: _fetchRecommendation,
                       ),
                     const SizedBox(height: 10),
-                    // ButtonWidget(
-                    //   variant: 'outline',
-                    //   icon: '📊',
-                    //   text: 'View Scan Comparison',
-                    //   onPressed: () => setState(() => _stage = 'compare'),
-                    // ),
+                    ButtonWidget(
+                      variant: 'outline',
+                      icon: '💬',
+                      text: 'Ask Rice Guard AI Bot',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ChatScreen(diseaseName: disease),
+                          ),
+                        );
+                      },
+                    ),
                     const SizedBox(height: 10),
                     ButtonWidget(
                       variant: 'ghost',
@@ -1198,9 +1187,6 @@ class _ScanScreenState extends State<ScanScreen> {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    // ── ESP32 Greenhouse Sensor Card ───────────────────────
-                    _buildEsp32SensorCard(),
-                    const SizedBox(height: 18),
                     const Text(
                       'Custom Notes',
                       style: TextStyle(
@@ -1245,277 +1231,7 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  // ── ESP32 Greenhouse Sensor Card ──────────────────────────────────────────
-  Widget _buildEsp32SensorCard() {
-    final bool isConnected = _bleStatus == BleStatus.connected;
-    final bool isBusy = _bleStatus == BleStatus.scanning ||
-        _bleStatus == BleStatus.connecting;
 
-    String statusLabel;
-    Color statusColor;
-    IconData statusIcon;
-    switch (_bleStatus) {
-      case BleStatus.connected:
-        statusLabel = 'Connected';
-        statusColor = AppColors.greenL;
-        statusIcon = Icons.bluetooth_connected_rounded;
-        break;
-      case BleStatus.scanning:
-        statusLabel = 'Scanning...';
-        statusColor = AppColors.accent;
-        statusIcon = Icons.bluetooth_searching_rounded;
-        break;
-      case BleStatus.connecting:
-        statusLabel = 'Connecting...';
-        statusColor = AppColors.accent;
-        statusIcon = Icons.bluetooth_searching_rounded;
-        break;
-      case BleStatus.error:
-        statusLabel = 'Not Found';
-        statusColor = AppColors.danger;
-        statusIcon = Icons.bluetooth_disabled_rounded;
-        break;
-      default:
-        statusLabel = 'Disconnected';
-        statusColor = AppColors.sub;
-        statusIcon = Icons.bluetooth_rounded;
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.forest.withOpacity(0.96),
-            const Color(0xFF27583A),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.forest.withOpacity(0.25),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // ── Header ──────────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(statusIcon, color: Colors.white, size: 18),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Farm Condition Sensor',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          if (isConnected)
-                            _PulseDot(color: statusColor)
-                          else
-                            Container(
-                              width: 7,
-                              height: 7,
-                              decoration: BoxDecoration(
-                                color: statusColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          const SizedBox(width: 5),
-                          Text(
-                            statusLabel,
-                            style: TextStyle(
-                              color: statusColor,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                // Connect / Disconnect button
-                GestureDetector(
-                  onTap: isBusy
-                      ? null
-                      : isConnected
-                          ? _bleService.disconnect
-                          : _bleService.connect,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isConnected
-                          ? AppColors.danger.withOpacity(0.85)
-                          : Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.2), width: 1),
-                    ),
-                    child: isBusy
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Text(
-                            isConnected ? 'Disconnect' : 'Connect',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // ── Divider ───────────────────────────────────────────────────
-          Container(
-            height: 1,
-            color: Colors.white.withOpacity(0.1),
-          ),
-          // ── Sensor tiles ─────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: _sensorData != null
-                ? Row(
-                    children: [
-                      _buildSensorTile(
-                        icon: '🌡️',
-                        label: 'Temperature',
-                        value: '${_sensorData!.temp.toStringAsFixed(1)}°C',
-                        barValue: (_sensorData!.temp.clamp(0, 50) / 50),
-                        barColor: _tempColor(_sensorData!.temp),
-                      ),
-                      _vDivider(),
-                      _buildSensorTile(
-                        icon: '💧',
-                        label: 'Humidity',
-                        value: '${_sensorData!.hum.toStringAsFixed(1)}%',
-                        barValue: _sensorData!.hum.clamp(0, 100) / 100,
-                        barColor: const Color(0xFF5BC8E8),
-                      ),
-                      _vDivider(),
-                      _buildSensorTile(
-                        icon: '🌱',
-                        label: 'Soil',
-                        value: '${_sensorData!.soil}%',
-                        barValue: _sensorData!.soil.clamp(0, 100) / 100,
-                        barColor: AppColors.accent,
-                      ),
-                    ],
-                  )
-                : Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          isConnected
-                              ? Icons.hourglass_top_rounded
-                              : Icons.sensors_off_rounded,
-                          color: Colors.white38,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          isConnected
-                              ? 'Waiting for sensor data...'
-                              : 'Tap Connect to read sensors',
-                          style: const TextStyle(
-                              color: Colors.white54, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSensorTile({
-    required String icon,
-    required String label,
-    required String value,
-    required double barValue,
-    required Color barColor,
-  }) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(icon, style: const TextStyle(fontSize: 22)),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(color: Colors.white54, fontSize: 10),
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: barValue,
-              minHeight: 4,
-              backgroundColor: Colors.white12,
-              valueColor: AlwaysStoppedAnimation<Color>(barColor),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _vDivider() {
-    return Container(
-      width: 1,
-      height: 70,
-      margin: const EdgeInsets.symmetric(horizontal: 10),
-      color: Colors.white.withOpacity(0.1),
-    );
-  }
-
-  Color _tempColor(double t) {
-    if (t < 20) return const Color(0xFF5BC8E8);
-    if (t < 30) return AppColors.greenL;
-    if (t < 35) return AppColors.accent;
-    return AppColors.danger;
-  }
 
   // ────────────────────────────────────────────────────────────────────────────
   Widget _buildCompareScreen() {

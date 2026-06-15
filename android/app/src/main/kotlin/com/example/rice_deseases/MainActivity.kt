@@ -1,4 +1,4 @@
-package com.example.rice_deseases
+package com.project.rice_deseases
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../theme/app_colors.dart';
 import '../widgets/card_widget.dart';
 import '../widgets/top_bar.dart';
@@ -11,6 +14,7 @@ import '../models/disease_rec.dart';
 import 'login_screen.dart';
 import '../models/disease_report.dart';
 import '../services/disease_service.dart';
+import '../services/gemini_service.dart';
 
 class MoreScreen extends StatefulWidget {
   final List<Farmer> farmers;
@@ -30,6 +34,204 @@ class _MoreScreenState extends State<MoreScreen> {
 
   List<Map<String, dynamic>> analytics = [];
 
+  late TextEditingController _apiKeyController;
+  late TextEditingController _usernameController;
+  late String _selectedDistrict;
+  bool _notifyAlerts = true;
+  bool _offlineMode = false;
+  bool _highQualityImage = true;
+
+  final List<String> districts = [
+    'Anuradhapura',
+    'Polonnaruwa',
+    'Kurunegala',
+    'Hambantota',
+    'Ampara',
+    'Gampaha',
+    'Colombo',
+    'Kandy',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _apiKeyController = TextEditingController();
+    _usernameController = TextEditingController(text: widget.supervisor.username);
+    _selectedDistrict = widget.supervisor.district.isNotEmpty ? widget.supervisor.district : 'Anuradhapura';
+    _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _apiKeyController.dispose();
+    _usernameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _apiKeyController.text = prefs.getString('gemini_api_key') ?? GeminiService.defaultKey;
+      _notifyAlerts = prefs.getBool('settings_notify_alerts') ?? true;
+      _offlineMode = prefs.getBool('settings_offline_mode') ?? false;
+      _highQualityImage = prefs.getBool('settings_high_quality') ?? true;
+    });
+  }
+
+  Future<void> _saveSetting(String key, dynamic value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value is bool) {
+      await prefs.setBool(key, value);
+    } else if (value is String) {
+      await prefs.setString(key, value);
+    }
+  }
+
+  Future<void> _saveProfileChanges() async {
+    final username = _usernameController.text.trim();
+    if (username.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Username cannot be empty')),
+      );
+      return;
+    }
+
+    try {
+      final response = await http.put(
+        Uri.parse('http://192.168.8.184:8000/api/update-profile/${widget.supervisor.id}'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': username,
+          'district': _selectedDistrict,
+        }),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        final updatedSupervisor = Supervisor.fromJson(data['user'] ?? data);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('supervisor', jsonEncode(updatedSupervisor.toJson()));
+        
+        // Handle topic change
+        if (widget.supervisor.district != updatedSupervisor.district) {
+          final messaging = FirebaseMessaging.instance;
+          if (widget.supervisor.district.isNotEmpty) {
+            await messaging.unsubscribeFromTopic('district_${widget.supervisor.district.replaceAll(' ', '_')}');
+          }
+          if (updatedSupervisor.district.isNotEmpty) {
+            await messaging.subscribeToTopic('district_${updatedSupervisor.district.replaceAll(' ', '_')}');
+          }
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile updated successfully on the server! Restart the app to apply changes fully.'),
+              backgroundColor: AppColors.green,
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(data['message'] ?? 'Failed to update profile on server.'),
+              backgroundColor: AppColors.danger,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      final updatedSupervisor = Supervisor(
+        id: widget.supervisor.id,
+        username: username,
+        email: widget.supervisor.email,
+        district: _selectedDistrict,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('supervisor', jsonEncode(updatedSupervisor.toJson()));
+      
+      // Handle topic change locally
+      if (widget.supervisor.district != updatedSupervisor.district) {
+        try {
+          final messaging = FirebaseMessaging.instance;
+          if (widget.supervisor.district.isNotEmpty) {
+            await messaging.unsubscribeFromTopic('district_${widget.supervisor.district.replaceAll(' ', '_')}');
+          }
+          if (updatedSupervisor.district.isNotEmpty) {
+            await messaging.subscribeToTopic('district_${updatedSupervisor.district.replaceAll(' ', '_')}');
+          }
+        } catch (_) {}
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Saved locally (Server offline). Restart the app to apply changes fully.'),
+            backgroundColor: AppColors.warn,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Logout', style: TextStyle(fontFamily: 'DM Serif Display')),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Logout', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('supervisor');
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  Future<void> _handleResetAllScanData() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reset All Scan Data', style: TextStyle(fontFamily: 'DM Serif Display')),
+        content: const Text('Warning: This will delete all scan reports from the database. This action is irreversible. Are you sure?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reset', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      setState(() {
+        _reports.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('All scan report records cleared successfully.')),
+        );
+      }
+    }
+  }
+
   final Map<String, Color> diseaseColors = {
     'Blast': const Color(0xFFF97316),
     'Sheath Blight': AppColors.warn,
@@ -47,6 +249,8 @@ class _MoreScreenState extends State<MoreScreen> {
   Widget build(BuildContext context) {
     if (_subPage == 'analytics') return _buildAnalyticsScreen();
     if (_subPage == 'reports') return _buildReportsScreen();
+    if (_subPage == 'settings') return _buildSettingsScreen();
+    if (_subPage == 'help') return _buildHelpScreen();
     return _buildMenuScreen();
   }
 
@@ -54,8 +258,8 @@ class _MoreScreenState extends State<MoreScreen> {
     final items = [
       {'icon': '📊', 'label': 'Analytics', 'desc': 'Disease trends & district stats', 'page': 'analytics'},
       {'icon': '📄', 'label': 'Reports', 'desc': 'Download farmer PDF reports', 'page': 'reports'},
-      {'icon': '⚙️', 'label': 'Settings', 'desc': 'App preferences', 'page': 'menu'},
-      {'icon': '❓', 'label': 'Help', 'desc': 'User guide & support', 'page': 'menu'},
+      {'icon': '⚙️', 'label': 'Settings', 'desc': 'App preferences & API keys', 'page': 'settings'},
+      {'icon': '❓', 'label': 'Help', 'desc': 'User guide & support info', 'page': 'help'},
       {'icon': '🚪', 'label': 'Logout', 'desc': 'Sign out of your account', 'page': 'logout'},
     ];
 
@@ -438,7 +642,7 @@ class _MoreScreenState extends State<MoreScreen> {
                                     ),
                                   ],
                                 ),
-                               ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 18),
@@ -508,9 +712,6 @@ class _MoreScreenState extends State<MoreScreen> {
                               DataColumn(label: Text('Photo', style: TextStyle(fontWeight: FontWeight.w700))),
                               DataColumn(label: Text('Farmer', style: TextStyle(fontWeight: FontWeight.w700))),
                               DataColumn(label: Text('Disease', style: TextStyle(fontWeight: FontWeight.w700))),
-                              DataColumn(label: Text('Temp', style: TextStyle(fontWeight: FontWeight.w700))),
-                              DataColumn(label: Text('Humidity', style: TextStyle(fontWeight: FontWeight.w700))),
-                              DataColumn(label: Text('Soil Moisture', style: TextStyle(fontWeight: FontWeight.w700))),
                               DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.w700))),
                               DataColumn(label: Text('Note', style: TextStyle(fontWeight: FontWeight.w700))),
                               DataColumn(label: Text('Solutions', style: TextStyle(fontWeight: FontWeight.w700))),
@@ -549,9 +750,6 @@ class _MoreScreenState extends State<MoreScreen> {
                                   ),
                                 ),
                                 DataCell(Text(report.diseaseName)),
-                                DataCell(Text(report.temp != null ? '${report.temp!.toStringAsFixed(1)}°C' : '-')),
-                                DataCell(Text(report.hum != null ? '${report.hum!.toStringAsFixed(1)}%' : '-')),
-                                DataCell(Text(report.soil != null ? '${report.soil}%' : '-')),
                                 DataCell(Text(report.createdAt.split('T').first)),
                                 DataCell(
                                   SizedBox(
@@ -665,6 +863,308 @@ class _MoreScreenState extends State<MoreScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSettingsScreen() {
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
+          children: [
+            TopBar(title: 'Settings', onBack: () => setState(() => _subPage = 'menu')),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 100),
+                children: [
+                  CardWidget(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Supervisor Profile',
+                          style: TextStyle(fontFamily: 'DM Serif Display', fontSize: 20, color: AppColors.text),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'USERNAME',
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.sub),
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: _usernameController,
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: const Color(0xFFEFE6D9),
+                            prefixIcon: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF2EBE1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.person, color: Color(0xFF5D4037), size: 20),
+                              ),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'DISTRICT',
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: AppColors.sub),
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFE6D9),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF2EBE1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.location_on, color: Colors.pink, size: 20),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String>(
+                                    value: _selectedDistrict,
+                                    items: districts.map((String value) {
+                                      return DropdownMenuItem<String>(
+                                        value: value,
+                                        child: Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                                      );
+                                    }).toList(),
+                                    onChanged: (String? newValue) {
+                                      if (newValue != null) {
+                                        setState(() {
+                                          _selectedDistrict = newValue;
+                                        });
+                                      }
+                                    },
+                                    icon: const Icon(Icons.arrow_drop_down, color: Colors.black54),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          child: TextButton(
+                            onPressed: _saveProfileChanges,
+                            style: TextButton.styleFrom(
+                              backgroundColor: const Color(0xFF2E5A36), // Dark green
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                            child: const Text(
+                              'Save Changes',
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileRow(String label, String value, String icon) {
+    return Row(
+      children: [
+        Text(icon, style: const TextStyle(fontSize: 18)),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        const Spacer(),
+        Text(value, style: const TextStyle(color: AppColors.sub, fontSize: 14)),
+      ],
+    );
+  }
+
+  Widget _buildSwitchRow(String title, String subtitle, bool val, ValueChanged<bool> onChanged) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.sub)),
+            ],
+          ),
+        ),
+        Switch(
+          value: val,
+          onChanged: onChanged,
+          activeColor: AppColors.greenL,
+          activeTrackColor: AppColors.greenPale,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHelpScreen() {
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
+          children: [
+            TopBar(title: 'Help & Support', onBack: () => setState(() => _subPage = 'menu')),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 100),
+                children: [
+                  CardWidget(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'About Rice Guard',
+                          style: TextStyle(
+                            fontFamily: 'DM Serif Display', 
+                            fontSize: 18, 
+                            color: AppColors.text, 
+                            fontWeight: FontWeight.bold
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Rice Guard is an advanced AI-powered assistant built for agricultural supervisors. Our goal is to protect your yield by providing instant, accurate detection of devastating rice diseases such as Blast, Sheath Blight, and Brown Spot directly from your smartphone.',
+                          style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  CardWidget(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'How to Setup',
+                          style: TextStyle(
+                            fontFamily: 'DM Serif Display', 
+                            fontSize: 18, 
+                            color: AppColors.text, 
+                            fontWeight: FontWeight.bold
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        _buildNumberedStep('1', 'Create your supervisor account and select your designated district.'),
+                        const SizedBox(height: 14),
+                        _buildNumberedStep('2', 'Grant camera permissions when prompted so the app can analyze leaves.'),
+                        const SizedBox(height: 14),
+                        _buildNumberedStep('3', 'Start adding the farmers you supervise in the \'Farmers\' tab.'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  CardWidget(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'How to Use the App',
+                          style: TextStyle(
+                            fontFamily: 'DM Serif Display', 
+                            fontSize: 18, 
+                            color: AppColors.text, 
+                            fontWeight: FontWeight.bold
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Home',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'View a quick summary of recent scans and district status.',
+                          style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.4),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Farmers',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Manage your list of farmers. Tap any farmer to view their detailed profile, past scans, and farm area.',
+                          style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.4),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Scan',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.text),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Tap the central microscope button to take a photo of an affected rice leaf. The AI will analyze it and provide an immediate diagnosis and treatment plan.',
+                          style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.4),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNumberedStep(String number, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: const BoxDecoration(
+            color: Color(0xFFE6F4EA), // Light green circle
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF137333), fontSize: 13),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 13, color: AppColors.sub, height: 1.4),
+          ),
+        ),
+      ],
     );
   }
 }
