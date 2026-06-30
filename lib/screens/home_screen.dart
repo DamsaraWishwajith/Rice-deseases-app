@@ -103,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final response = await http
           .get(
-            Uri.parse('http://192.168.8.184:8000/api/farmers'),
+            Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/farmers'),
           )
           .timeout(const Duration(seconds: 10));
 
@@ -183,7 +183,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.8.184:8000/api/get-district-alerts'),
+        Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/get-district-alerts'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'supervisor_id': widget.supervisor.id,

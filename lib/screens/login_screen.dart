@@ -481,7 +481,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.8.184:8000/api/login'),
+        Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'email': _emailController.text,
@@ -545,7 +545,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('http://192.168.8.184:8000/api/register'),
+        Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/register'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'username': _usernameController.text,

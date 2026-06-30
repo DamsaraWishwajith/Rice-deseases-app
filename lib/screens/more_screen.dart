@@ -98,7 +98,7 @@ class _MoreScreenState extends State<MoreScreen> {
 
     try {
       final response = await http.put(
-        Uri.parse('http://192.168.8.184:8000/api/update-profile/${widget.supervisor.id}'),
+        Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/update-profile/${widget.supervisor.id}'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'username': username,

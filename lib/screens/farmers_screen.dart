@@ -371,7 +371,7 @@ class _FarmersScreenState extends State<FarmersScreen> {
     try {
       final response = await http
           .post(
-            Uri.parse('http://192.168.8.184:8000/api/farmers'),
+            Uri.parse('http://rice-diseases-store.us.stackstaging.com/api/farmers'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'supervisor_id': widget.supervisor.id,
